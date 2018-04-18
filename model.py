@@ -18,8 +18,6 @@ class Image_Encoder_CNN(nn.Module):
         nn.ReLU(True),
         nn.Dropout(),)
         self.vgg11 = vgg11
-        # print(self.vgg11)
-        # print(vgg11)
         self.linear = nn.Linear(vgg11.classifier[0].out_features, input_size)
         self.bn = nn.BatchNorm1d(input_size, momentum=0.01)
         self.init_weights()
