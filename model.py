@@ -21,7 +21,7 @@ class Image_Encoder_CNN(nn.Module):
         self.linear.weight.data.normal_(0.0, 0.02)
         self.linear.bias.data.fill_(0)
 
-    def forward_vgg(self, image):
+    def forward(self, image):
         imfeatures = self.vgg11(image)
         imfeatures = Variable(imfeatures.data)
         imfeatures = imfeatures.view(imfeatures.size(0), -1)
@@ -48,7 +48,7 @@ class Image_Encoder_LSTM(nn.Module):
         self.lstm.weight_hh_l0 = nn.init.xavier_uniform(self.lstm.weight_hh_l0)
         self.lstm.weight_ih_l0 = nn.init.xavier_uniform(self.lstm.weight_ih_l0)
 
-    def forwar_lstm(self, imfeatures):
+    def forward(self, imfeatures):
         hidden, _ = self.lstm(imfeatures)
         output = hidden[-1]
         return output
