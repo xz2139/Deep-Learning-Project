@@ -11,7 +11,12 @@ class Image_Encoder_CNN(nn.Module):
     def __init__(self, input_size):
         super(Image_Encoder_CNN, self).__init__()
         vgg11 = models.vgg11(pretrained=True)
-        modules = list(vgg11.children())[:-1]
+        modules = list(vgg11.children())
+        module_head = modules[0]
+        module_head = nn.Sequential(*module_head)
+        module_end = list(modules[1])[0:-1]
+        module_end = nn.Sequential(*module_end)
+        modules = [module_head] + [module_end]
         self.vgg11 = nn.Sequential(*modules)
         self.linear = nn.Linear(vgg11.classifier[0].out_features, input_size)
         self.bn = nn.BatchNorm1d(input_size, momentum=0.01)
