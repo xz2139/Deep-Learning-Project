@@ -5,19 +5,21 @@ import torchvision
 from torchvision import models
 from torch.autograd import Variable
 
-
 class Image_Encoder_CNN(nn.Module):
 
     def __init__(self, input_size):
         super(Image_Encoder_CNN, self).__init__()
         vgg11 = models.vgg11(pretrained=True)
-        modules = list(vgg11.children())
-        module_head = modules[0]
-        module_head = nn.Sequential(*module_head)
-        module_end = list(modules[1])[0:-1]
-        module_end = nn.Sequential(*module_end)
-        modules = [module_head] + [module_end]
-        self.vgg11 = nn.Sequential(*modules)
+        vgg11.classifier = nn.Sequential(
+        nn.Linear(512 * 7 * 7, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),
+        nn.Linear(4096, 4096),
+        nn.ReLU(True),
+        nn.Dropout(),)
+        self.vgg11 = vgg11
+        # print(self.vgg11)
+        # print(vgg11)
         self.linear = nn.Linear(vgg11.classifier[0].out_features, input_size)
         self.bn = nn.BatchNorm1d(input_size, momentum=0.01)
         self.init_weights()
@@ -57,3 +59,4 @@ class Image_Encoder_LSTM(nn.Module):
         hidden, _ = self.lstm(imfeatures)
         output = hidden[-1]
         return output
+
