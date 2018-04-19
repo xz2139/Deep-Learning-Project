@@ -1,33 +1,19 @@
 import nltk
 import pickle
-import argparse
 from collections import Counter
 import pandas as pd
 import glob
-
 import argparse
 import torch
 import torch.nn as nn
 import numpy as np
 import os
-import pickle
+import shutil
 from torch.autograd import Variable 
 from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision import transforms
-
-import torch
-import torchvision.transforms as transforms
 import torch.utils.data as data
-import os
-import pickle
-import numpy as np
-import nltk
 from PIL import Image
-import pandas as pd
-
-import torch
-import torch.nn as nn
-import numpy as np
 import torchvision
 from torchvision import models
 
@@ -221,7 +207,7 @@ def get_loader(table, vocab,transform, batch_size, shuffle, num_workers):
                                               collate_fn=collate_fn)
     return data_loader
 
-loader=get_loader('sentence_nonempty.pkl', vocab, None, 2,shuffle=True, num_workers=0) 
+loader=get_loader('sentence_nonempty.pkl', vocab, None, 32,shuffle=True, num_workers=0) 
 
 import torch
 import torch.nn as nn
@@ -309,6 +295,23 @@ class DecoderRNN(nn.Module):
         hiddens, _ = self.lstm(packed)
         outputs = self.linear(hiddens[0])
         return outputs
+    def sample(self, features, length, states=None):
+        """Samples captions for given image features (Greedy search)."""
+        sampled_ids = []
+        inputs = features.unsqueeze(1)
+        for i in range(length):      
+ #           print(sampled_ids)# maximum sampling length
+            hiddens, states = self.lstm(inputs, states)          # (batch_size, 1, hidden_size), 
+            outputs = self.linear(hiddens.squeeze(1))            # (batch_size, vocab_size)
+            predicted = outputs.max(1)[1]
+            sampled_ids.append(predicted)
+    #             print(predicted)
+    #             print(sampled_ids)
+    #             print('breaks-----')
+            inputs = self.embed(predicted)
+            inputs = inputs.unsqueeze(1)                         # (batch_size, 1, embed_size)
+        sampled_ids = torch.cat(sampled_ids)                  # (batch_size, 20)
+        return sampled_ids.squeeze()
     
 def to_var(x, volatile=False):
     if torch.cuda.is_available():
@@ -318,12 +321,20 @@ def to_var(x, volatile=False):
 
 
 cnn_encoder=Image_Encoder_CNN(output_size=1000)
-lstm_encoder=Image_Encoder_LSTM(embedding_size=1000, hidden_size=50, num_layers=1, use_cuda=False)
-decoder=DecoderRNN(embed_size=50, hidden_size=64, vocab_size=len(vocab), num_layers=1)
+lstm_encoder=Image_Encoder_LSTM(embedding_size=1000, hidden_size=512, num_layers=1, use_cuda=False)
+decoder=DecoderRNN(embed_size=512, hidden_size=256, vocab_size=len(vocab), num_layers=1)
 criterion = nn.CrossEntropyLoss()
 params = list(cnn_encoder.linear.parameters())+list(cnn_encoder.bn.parameters()) + list(lstm_encoder.parameters()) + list(decoder.parameters())
 optimizer = torch.optim.Adam(params, lr=0.001)
 
+
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, 'model_best.pth.tar')
+resume=None
+
+best_loss=100
 for epoch in range(20):
         for i, (images, captions, lengths) in enumerate(loader):
             images = to_var(images, volatile=True)
@@ -341,7 +352,12 @@ for epoch in range(20):
             loss = criterion(outputs, Variable(targets))
             loss.backward()
             optimizer.step()
-            print(loss)
+            if loss.data[0]<best_loss:
+                best_loss=loss.data[0]
+                is_best=True
+            else:
+                is_best=False
+                
             # Print log info
             if i % 10 == 0:
                 print('Epoch: %d,Step:%d, Loss: %.4f, Perplexity: %5.4f'
@@ -349,3 +365,33 @@ for epoch in range(20):
                 with open('Progress.txt', 'a') as f:
                     print('Epoch: %d,Step:%d, Loss: %.4f, Perplexity: %5.4f'
                       %(epoch,i, loss.data[0], np.exp(loss.data[0])), file=f)  
+                        # Save the models
+                    print('sample: ',list(decoder.sample(lstm_features[0].unsqueeze(0),lengths[0]).data), file=f)
+                    print('caption: ',list(captions[0]), file=f)                
+                        
+            if i % 50 == 0:
+
+ #               torch.save(cnn_encoder.state_dict(),'cnn_encoder-%d-%d.pkl' %(epoch+1, i+1))
+ #               torch.save(lstm_encoder.state_dict(),'lstm_encoder-%d-%d.pkl' %(epoch+1, i+1))                
+ #               torch.save(decoder.state_dict(),'decoder-%d-%d.pkl' %(epoch+1, i+1))
+                
+                save_checkpoint({'epoch': epoch + 1,
+                            'step':i+1,
+                            'cnn_encoder': cnn_encoder.state_dict(),
+                            'lstm_encoder': lstm_encoder.state_dict(),
+                            'decoder': decoder.state_dict(),   
+                            'best_loss':best_loss,
+                            'optimizer' : optimizer.state_dict()}, is_best)
+            if resume!=None:
+                if os.path.isfile(resume):
+                    print("=> loading checkpoint '{}'".format(resume))
+                    checkpoint = torch.load(resume)
+                    epoch = checkpoint['epoch']
+                    best_loss = checkpoint['best_loss']
+                    cnn_encoder.load_state_dict(checkpoint['cnn_encoder'])
+                    lstm_encoder.load_state_dict(checkpoint['lstm_encoder'])                    
+                    decoder.load_state_dict(checkpoint['decoder'])                    
+                    optimizer.load_state_dict(checkpoint['optimizer'])
+                    print("=> loaded checkpoint '{}' (epoch {})".format(resume, checkpoint['epoch']))
+                else:
+                    print("=> no checkpoint found at '{}'".format(resume))
