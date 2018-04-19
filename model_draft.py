@@ -11,9 +11,6 @@ import torch.nn as nn
 import numpy as np
 import os
 import pickle
-from data_loader import get_loader 
-from build_vocab import Vocabulary
-from model import EncoderCNN, DecoderRNN 
 from torch.autograd import Variable 
 from torch.nn.utils.rnn import pack_padded_sequence
 from torchvision import transforms
@@ -26,10 +23,7 @@ import pickle
 import numpy as np
 import nltk
 from PIL import Image
-from build_vocab import Vocabulary
 import pandas as pd
-
-from __future__ import print_function, division
 
 import torch
 import torch.nn as nn
@@ -67,7 +61,9 @@ def build_vocab(data='files_sentence.csv', threshold=4):
     counter = Counter()
     for i, id in enumerate(ids):
         caption = str(mydict[id])
-        tokens = nltk.tokenize.word_tokenize(caption.lower())
+  #      tokens = nltk.tokenize.word_tokenize(caption.lower())
+        tokens = caption.lower().split()
+
         counter.update(tokens)
 
         if i % 1000 == 0:
@@ -104,12 +100,12 @@ sentences['file']=None
 
 def files(string):
     (folder,name)=string.split("_")
-    return glob.glob('D:/cources/1008/image_caption/data/mouths/'+str(string)+'/*.png')
+    return glob.glob('mouths/'+str(string)+'/*.png')
 
 sentences['file']=sentences['id'].apply(files)
 sentences[sentences.file.apply(lambda x: len(x))!=0].reset_index().to_pickle('sentence_nonempty.pkl')
 
-with open('data/vocab_try.pkl', 'rb') as f:
+with open('vocab_try.pkl', 'rb') as f:
     vocab = pickle.load(f)
 
 with open('sentence_nonempty.pkl', 'rb') as f:
@@ -139,7 +135,6 @@ class Dataset(data.Dataset):
         vocab = self.vocab
         ann_id = self.ids[index]
         caption = table[table.id==ann_id]['sentence'].item()
-        folder = table[table.id==ann_id]['folder'].item()
         path = table[table.id==ann_id]['file'].item()
         images=[]
         for i in range(151):
@@ -161,7 +156,8 @@ class Dataset(data.Dataset):
 #         seq_img=torch.from_numpy(seq_img).float()
 
         # Convert caption (string) to word ids.
-        tokens = nltk.tokenize.word_tokenize(str(caption).lower())
+ #       tokens = nltk.tokenize.word_tokenize(str(caption).lower())
+        tokens = (str(caption).lower()).split()
         caption = []
         caption.append(vocab('<start>'))
         caption.extend([vocab(token) for token in tokens])
@@ -206,6 +202,24 @@ def collate_fn(data):
         targets[i, :end] = cap[:end]        
     return images, targets, lengths
 
+def get_loader(table, vocab,transform, batch_size, shuffle, num_workers):
+    """Returns torch.utils.data.DataLoader for custom coco dataset."""
+    # COCO caption dataset
+    mvlrs = Dataset(table=table,
+                       vocab=vocab,
+                       transform=transform)
+    
+    # Data loader for COCO dataset
+    # This will return (images, captions, lengths) for every iteration.
+    # images: tensor of shape (batch_size, 3, 224, 224).
+    # captions: tensor of shape (batch_size, padded_length).
+    # lengths: list indicating valid length for each caption. length is (batch_size).
+    data_loader = torch.utils.data.DataLoader(dataset=mvlrs, 
+                                              batch_size=batch_size,
+                                              shuffle=shuffle,
+                                              num_workers=num_workers,
+                                              collate_fn=collate_fn)
+    return data_loader
 
 loader=get_loader('sentence_nonempty.pkl', vocab, None, 2,shuffle=True, num_workers=0) 
 
@@ -332,3 +346,6 @@ for epoch in range(20):
             if i % 10 == 0:
                 print('Epoch: %d,Step:%d, Loss: %.4f, Perplexity: %5.4f'
                       %(epoch,i, loss.data[0], np.exp(loss.data[0]))) 
+                with open('Progress.txt', 'a') as f:
+                    print('Epoch: %d,Step:%d, Loss: %.4f, Perplexity: %5.4f'
+                      %(epoch,i, loss.data[0], np.exp(loss.data[0])), file=f)  
