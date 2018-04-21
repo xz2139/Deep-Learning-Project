@@ -71,7 +71,7 @@ def build_vocab(data='files_sentence.csv', threshold=4):
     return vocab
 
 def main():
-    vocab = build_vocab('files_sentence.csv',
+    vocab = build_vocab('train_sentence.csv',
                         threshold=4)
     vocab_path = 'data/vocab_try.pkl'
     with open(vocab_path, 'wb') as f:
@@ -81,7 +81,7 @@ def main():
 
     
     
-sentences=pd.read_csv('files_sentence.csv')
+sentences=pd.read_csv('train_sentence.csv')
 sentences['file']=None
 
 def files(string):
@@ -207,7 +207,7 @@ def get_loader(table, vocab,transform, batch_size, shuffle, num_workers):
                                               collate_fn=collate_fn)
     return data_loader
 
-loader=get_loader('sentence_nonempty.pkl', vocab, None, 32,shuffle=True, num_workers=0) 
+loader=get_loader('sentence_nonempty.pkl', vocab, None, 64,shuffle=True, num_workers=0) 
 
 import torch
 import torch.nn as nn
