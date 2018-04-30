@@ -98,6 +98,33 @@ with open('sentence_nonempty.pkl', 'rb') as f:
     table = pickle.load(f)
 
 
+# Load Conceptnet Numberbatch's (CN) embeddings, similar to GloVe, but probably better 
+# (https://github.com/commonsense/conceptnet-numberbatch)
+embeddings_index = {}
+with open('numberbatch-en.txt', encoding='utf-8') as f:
+    for line in f:
+        values = line.split(' ')
+        word = values[0]
+        embedding = np.asarray(values[1:], dtype='float32')
+        embeddings_index[word] = embedding
+
+print('Word embeddings:', len(embeddings_index))  
+
+embedding_dim = 300
+n_words=len(vocab)
+output_embedding_matrix = np.zeros((n_words, embedding_dim))
+for i,word in vocab.idx2word.items():
+    if word in embeddings_index:
+        output_embedding_matrix[i] = embeddings_index[word]
+    else:
+        # If word not in CN, create a random embedding for it
+        new_embedding = np.array(np.random.uniform(-1.0, 1.0, embedding_dim))
+        embeddings_index[word] = new_embedding
+        output_embedding_matrix[i] = new_embedding
+
+d=sentences.file.apply(lambda x: len(x)).max()
+
+   
 class Dataset(data.Dataset):
     """COCO Custom Dataset compatible with torch.utils.data.DataLoader."""
     def __init__(self, table, vocab, transform=None):
@@ -123,7 +150,7 @@ class Dataset(data.Dataset):
         caption = table[table.id==ann_id]['sentence'].item()
         path = table[table.id==ann_id]['file'].item()
         images=[]
-        for i in range(151):
+        for i in range(d):
             try:
                 p=path[i]
                 image = Image.open(p).convert('RGB')
@@ -139,10 +166,7 @@ class Dataset(data.Dataset):
                 images.append(torch.from_numpy(np.zeros((3,224,224))).float())                
 
         seq_img=torch.stack(images,0)
-#         seq_img=torch.from_numpy(seq_img).float()
 
-        # Convert caption (string) to word ids.
- #       tokens = nltk.tokenize.word_tokenize(str(caption).lower())
         tokens = (str(caption).lower()).split()
         caption = []
         caption.append(vocab('<start>'))
@@ -175,9 +199,7 @@ def collate_fn(data):
     data.sort(key=lambda x: len(x[1]), reverse=True)
     images, captions = zip(*data)
 
-    # Merge images (from tuple of 3D tensor to 4D tensor).
-#     print(len(images))
-#     print(images[0].shape)
+
     images = torch.stack(images, 0)
 
     # Merge captions (from tuple of 1D tensor to 2D tensor).
@@ -194,12 +216,7 @@ def get_loader(table, vocab,transform, batch_size, shuffle, num_workers):
     mvlrs = Dataset(table=table,
                        vocab=vocab,
                        transform=transform)
-    
-    # Data loader for COCO dataset
-    # This will return (images, captions, lengths) for every iteration.
-    # images: tensor of shape (batch_size, 3, 224, 224).
-    # captions: tensor of shape (batch_size, padded_length).
-    # lengths: list indicating valid length for each caption. length is (batch_size).
+
     data_loader = torch.utils.data.DataLoader(dataset=mvlrs, 
                                               batch_size=batch_size,
                                               shuffle=shuffle,
@@ -207,7 +224,7 @@ def get_loader(table, vocab,transform, batch_size, shuffle, num_workers):
                                               collate_fn=collate_fn)
     return data_loader
 
-loader=get_loader('sentence_nonempty.pkl', vocab, None, 64,shuffle=True, num_workers=0) 
+loader=get_loader('sentence_nonempty.pkl', vocab, None, 32,shuffle=True, num_workers=0) 
 
 import torch
 import torch.nn as nn
@@ -276,6 +293,7 @@ class DecoderRNN(nn.Module):
         """Set the hyper-parameters and build the layers."""
         super(DecoderRNN, self).__init__()
         self.embed = nn.Embedding(vocab_size, embed_size)
+        self.embed.weight.data.copy_(torch.from_numpy(output_embedding_matrix))
         #print('lstm',embed_size, hidden_size, num_layers)
         self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, vocab_size)
@@ -305,9 +323,7 @@ class DecoderRNN(nn.Module):
             outputs = self.linear(hiddens.squeeze(1))            # (batch_size, vocab_size)
             predicted = outputs.max(1)[1]
             sampled_ids.append(predicted)
-    #             print(predicted)
-    #             print(sampled_ids)
-    #             print('breaks-----')
+
             inputs = self.embed(predicted)
             inputs = inputs.unsqueeze(1)                         # (batch_size, 1, embed_size)
         sampled_ids = torch.cat(sampled_ids)                  # (batch_size, 20)
@@ -321,8 +337,11 @@ def to_var(x, volatile=False):
 
 
 cnn_encoder=Image_Encoder_CNN(output_size=1000)
-lstm_encoder=Image_Encoder_LSTM(embedding_size=1000, hidden_size=512, num_layers=1, use_cuda=False)
-decoder=DecoderRNN(embed_size=512, hidden_size=256, vocab_size=len(vocab), num_layers=1)
+lstm_encoder=Image_Encoder_LSTM(embedding_size=1000, hidden_size=300, num_layers=2, use_cuda=True)
+decoder=DecoderRNN(embed_size=300, hidden_size=256, vocab_size=len(vocab), num_layers=2)
+cnn_encoder.cuda()
+lstm_encoder.cuda()
+decoder.cuda()
 criterion = nn.CrossEntropyLoss()
 params = list(cnn_encoder.linear.parameters())+list(cnn_encoder.bn.parameters()) + list(lstm_encoder.parameters()) + list(decoder.parameters())
 optimizer = torch.optim.Adam(params, lr=0.001)
@@ -335,7 +354,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 resume=None
 
 best_loss=100
-for epoch in range(20):
+for epoch in range(100):
         for i, (images, captions, lengths) in enumerate(loader):
             images = to_var(images, volatile=True)
             cnn_encoder.zero_grad()
@@ -347,9 +366,9 @@ for epoch in range(20):
             
             ll=torch.stack(l,0)
             lstm_features = lstm_encoder(ll)
-            outputs = decoder(lstm_features, Variable(captions), lengths)
+            outputs = decoder(lstm_features, to_var(captions), lengths)
             targets = pack_padded_sequence(captions, lengths, batch_first=True)[0]
-            loss = criterion(outputs, Variable(targets))
+            loss = criterion(outputs, to_var(targets))
             loss.backward()
             optimizer.step()
             if loss.data[0]<best_loss:
